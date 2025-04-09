@@ -76,9 +76,11 @@ class OverlaySubtitle(QWidget):
     MIN_FONT_SIZE = 10
     MAX_FONT_SIZE = 30
     DEFAULT_PLAYBACK_RATE = 1.0 # Tốc độ mặc định
-    MIN_PLAYBACK_RATE = 0.5
+    MIN_PLAYBACK_RATE = 0.25
     MAX_PLAYBACK_RATE = 2.0
-    # Ánh xạ slider: 50 -> 0.5x, 100 -> 1.0x, 200 -> 2.0x
+    # Các mức tốc độ cố định
+    PLAYBACK_RATES = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0]
+    # Ánh xạ slider: 25 -> 0.25x, 50 -> 0.5x, 100 -> 1.0x, 200 -> 2.0x
     SLIDER_TO_RATE_FACTOR = 100
     DEFAULT_SHOW_VIETSUB = False # Mặc định không hiện Vietsub
 
@@ -173,7 +175,7 @@ class OverlaySubtitle(QWidget):
         # Speed slider and label
         control_layout.addWidget(QLabel("Tốc độ:"))
         self.speed_slider = QSlider(Qt.Orientation.Horizontal)
-        # Chuyển đổi rate sang giá trị slider (0.5 -> 50, 1.0 -> 100, 2.0 -> 200)
+        # Chuyển đổi rate sang giá trị slider (0.25 -> 25, 0.5 -> 50, 1.0 -> 100, 2.0 -> 200)
         min_slider_val = int(self.MIN_PLAYBACK_RATE * self.SLIDER_TO_RATE_FACTOR)
         max_slider_val = int(self.MAX_PLAYBACK_RATE * self.SLIDER_TO_RATE_FACTOR)
         self.speed_slider.setRange(min_slider_val, max_slider_val)
@@ -437,11 +439,16 @@ class OverlaySubtitle(QWidget):
         self.time_label.setStyleSheet(f"color: {text_color}; padding: 5px;")
 
     def update_playback_speed(self, value):
-        """Cập nhật tốc độ phát dựa trên giá trị slider"""
-        # Chuyển đổi giá trị slider sang playback rate (50 -> 0.5, 100 -> 1.0, 200 -> 2.0)
-        self.current_playback_rate = value / self.SLIDER_TO_RATE_FACTOR
+        # Chuyển đổi giá trị slider sang playback rate
+        raw_rate = value / self.SLIDER_TO_RATE_FACTOR
+        
+        # Tìm giá trị tốc độ gần nhất trong danh sách cho phép
+        closest_rate = min(self.PLAYBACK_RATES, key=lambda x: abs(x - raw_rate))
+        
+        self.current_playback_rate = closest_rate
         self.player.setPlaybackRate(self.current_playback_rate)
         self.speed_label.setText(f"{self.current_playback_rate:.2f}x")
+        self.speed_slider.setValue(int(self.current_playback_rate * self.SLIDER_TO_RATE_FACTOR))
     
     def toggle_vietnamese_display(self, checked):
         """Cập nhật trạng thái hiển thị Vietsub và làm mới phụ đề hiện tại (nếu có)"""

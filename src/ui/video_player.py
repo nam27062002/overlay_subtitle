@@ -112,8 +112,8 @@ class VideoPlayerWindow(QMainWindow):
         self.stop_button.clicked.connect(self.stop_playback)
         
         self.speed_combo = QComboBox()
-        self.speed_combo.addItems(["0.5x", "0.75x", "1.0x", "1.25x", "1.5x", "2.0x"])
-        self.speed_combo.setCurrentIndex(2)  # 1.0x
+        self.speed_combo.addItems(["0.25x", "0.5x", "0.75x", "1.0x", "1.25x", "1.5x", "1.75x", "2.0x"])
+        self.speed_combo.setCurrentIndex(3)  # 1.0x
         self.speed_combo.currentIndexChanged.connect(self.change_playback_speed)
         
         controls_layout.addWidget(self.play_button)
@@ -233,7 +233,7 @@ class VideoPlayerWindow(QMainWindow):
             self.timer.stop()
     
     def change_playback_speed(self, index):
-        speeds = [0.5, 0.75, 1.0, 1.25, 1.5, 2.0]
+        speeds = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0]
         self.player.setPlaybackRate(speeds[index])
     
     def update_subtitle(self):

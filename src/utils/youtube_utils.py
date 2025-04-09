@@ -8,8 +8,9 @@ import time
 import tempfile
 import shutil
 from pytube import YouTube
-from youtube_transcript_api import YouTubeTranscriptApi
+from youtube_transcript_api import YouTubeTranscriptApi, NoTranscriptFound, TranscriptsDisabled
 from datetime import datetime
+import yt_dlp # Đảm bảo import yt_dlp ở đầu file nếu chưa có
 
 # Thử import thư viện dịch
 try:
@@ -19,6 +20,11 @@ except ImportError:
     TRANSLATORS_AVAILABLE = False
     print("WARNING: Thư viện 'translators' chưa được cài đặt. Phụ đề sẽ không được tự động dịch.")
     print("Chạy 'pip install translators' để cài đặt.")
+
+# --- Custom Exception --- (Thêm exception riêng)
+class NoEnglishTranscriptError(Exception):
+    """Lỗi được ném khi không tìm thấy phụ đề tiếng Anh."""
+    pass
 
 # Phương pháp tải dự phòng sử dụng yt-dlp
 def download_with_ytdlp(url, video_id, download_folder, safe_title):
@@ -42,6 +48,7 @@ def download_with_ytdlp(url, video_id, download_folder, safe_title):
         'quiet': True,
         'no_warnings': True,
         'ignoreerrors': False,
+        'ffmpeg_location': r'D:\OverlaySubtitles\FFMPEG',
     }
     
     abs_audio_path = None
@@ -97,6 +104,22 @@ def extract_video_id(url):
 def download_audio(url, download_folder, video_id, status_callback=None):
     if status_callback: status_callback("Đang chuẩn bị tải âm thanh...")
     
+    # Callback tiến trình để theo dõi chi tiết
+    def progress_hook(d):
+        if status_callback and d['status'] == 'downloading':
+            if '_percent_str' in d and '_speed_str' in d:
+                status_callback(f"Đang tải âm thanh: {d['_percent_str']} ({d['_speed_str']})")
+        elif status_callback and d['status'] == 'finished':
+            status_callback(f"Đã tải xong, đang xử lý âm thanh...")
+    
+    # Callback xử lý sau để theo dõi quá trình chuyển đổi
+    def postprocessor_hook(d):
+        if status_callback:
+            if d['status'] == 'started':
+                status_callback(f"Đang xử lý âm thanh... {d.get('postprocessor', '')}")
+            elif d['status'] == 'finished':
+                status_callback(f"Xử lý âm thanh hoàn tất")
+    
     ydl_opts = {
         'format': 'bestaudio/best',
         'outtmpl': os.path.join(download_folder, f'YouTube_Audio_{video_id}.%(ext)s'),
@@ -107,10 +130,10 @@ def download_audio(url, download_folder, video_id, status_callback=None):
         }],
         'quiet': True,
         'no_warnings': True,
-         'progress_hooks': [lambda d: status_callback(f"Đang tải âm thanh: {d['_percent_str']} ({d['_speed_str']})") if status_callback and d['status'] == 'downloading' else None],
-         'postprocessor_hooks': [lambda d: status_callback(f"Đang xử lý âm thanh...") if status_callback and d['status'] == 'started' else None],
-         'nocheckcertificate': True, # Bỏ qua kiểm tra chứng chỉ SSL nếu cần
-         'http_chunk_size': 10485760 # Tăng kích thước chunk tải
+        'progress_hooks': [progress_hook],
+        'postprocessor_hooks': [postprocessor_hook],
+        'nocheckcertificate': True, # Bỏ qua kiểm tra chứng chỉ SSL nếu cần
+        'http_chunk_size': 10485760 # Tăng kích thước chunk tải
     }
     
     try:
@@ -135,7 +158,7 @@ def download_audio(url, download_folder, video_id, status_callback=None):
 
             if status_callback: status_callback("Tải và xử lý âm thanh hoàn tất.")
             print(f"Audio downloaded to: {final_audio_path}")
-            return final_audio_path
+            return final_audio_path, info.get('title', f'Video_{video_id}') # Trả về cả title
             
     except yt_dlp.utils.DownloadError as e:
         # In lỗi chi tiết hơn
@@ -153,125 +176,148 @@ def download_audio(url, download_folder, video_id, status_callback=None):
         raise
 
 def download_subtitles(video_id, download_folder, title, status_callback=None):
-    if status_callback: status_callback("Đang tải phụ đề...")
-    subtitle_path = None
+    if status_callback: status_callback("Đang tìm phụ đề tiếng Anh tự động...")
+    subtitles_data_fetched = None
+    transcript = None
     try:
-        # Lấy danh sách transcript có sẵn
         transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
         
-        # Ưu tiên tiếng Anh gốc, sau đó đến tiếng Anh tự động tạo
-        transcript = None
         try:
             transcript = transcript_list.find_generated_transcript(['en'])
-            print("Using generated English transcript.")
-        except Exception:
-             print("Generated English transcript not found.")
-             try:
-                  # Thử tìm transcript được tạo thủ công
-                  transcript = transcript_list.find_manually_created_transcript(['en'])
-                  print("Using manual English transcript.")
-             except Exception:
-                  print("Manual English transcript not found.")
-                  # Nếu không có tiếng Anh, thử tìm ngôn ngữ khác và dịch? (Tùy chọn nâng cao)
-                  # For now, fail if no English transcript found.
-                  raise Exception("Không tìm thấy phụ đề tiếng Anh (gốc hoặc tự động).")
+            print("Tìm thấy phụ đề tiếng Anh tự động.")
+            if status_callback: status_callback("Đã tìm thấy phụ đề tiếng Anh tự động.")
+        except NoTranscriptFound:
+            print("Không tìm thấy phụ đề tiếng Anh TỰ ĐỘNG. Video này sẽ bị bỏ qua.")
+            if status_callback: status_callback("Không tìm thấy phụ đề tiếng Anh tự động.")
+            raise NoEnglishTranscriptError(f"Video {video_id} không có phụ đề tiếng Anh tự động.")
+        
+        subtitles_data_fetched = transcript.fetch()
+        if status_callback: status_callback("Đã tải thành công dữ liệu phụ đề.")
 
-        # Lấy dữ liệu phụ đề (list of dicts)
-        subtitles_data = transcript.fetch()
+    except TranscriptsDisabled:
+         print(f"Phụ đề đã bị tắt cho video {video_id}.")
+         raise NoEnglishTranscriptError(f"Phụ đề đã bị tắt cho video {video_id}.")
+    except NoEnglishTranscriptError:
+         raise
+    except Exception as e:
+         print(f"Lỗi API khi lấy phụ đề cho {video_id}: {e}")
+         raise NoEnglishTranscriptError(f"Lỗi khi lấy phụ đề cho video {video_id}: {e}")
 
-        # === THÊM BƯỚC DỊCH TẠI ĐÂY ===
+    if subtitles_data_fetched:
+        subtitles_data_processed = []
+
         if TRANSLATORS_AVAILABLE:
             if status_callback: status_callback("Đang dịch phụ đề (có thể mất vài phút)...")
             print("Bắt đầu dịch phụ đề sang tiếng Việt...")
             translated_count = 0
             errors = []
-            # Tạo list mới để tránh vấn đề lặp và sửa đổi cùng lúc
-            updated_subtitles_data = [] 
-
-            for i, sub in enumerate(subtitles_data):
-                sub_copy = sub.copy() # Làm việc trên bản sao
-                en_text = sub_copy.get("text", "")
-                # Kiểm tra xem đã có vi_text chưa (có thể API trả về nhiều ngôn ngữ?)
-                # Hoặc logic trước đó đã thêm vào (dù không nên)
-                if not sub_copy.get("vi_text") and en_text: 
+            total_subs = len(subtitles_data_fetched)
+            
+            for i, sub_obj in enumerate(subtitles_data_fetched):
+                # Cập nhật tiến trình dịch theo số lượng
+                if status_callback and i % 10 == 0:  # Cập nhật mỗi 10 câu để tránh quá nhiều cập nhật
+                    percent_done = min(100, int((i / total_subs) * 100))
+                    status_callback(f"Đang dịch phụ đề: {percent_done}% ({i}/{total_subs})")
+                
+                # Tạo dictionary từ các thuộc tính trực tiếp của đối tượng
+                sub_dict = {
+                    'text': sub_obj.text,
+                    'start': sub_obj.start,
+                    'duration': sub_obj.duration
+                }
+                
+                en_text = sub_dict['text']
+                if en_text: 
                     try:
-                        # Dịch sang tiếng Việt
-                        vi_text = ts.translate_text(
-                            en_text,
-                            translator='google', # hoặc 'bing', ...
-                            from_language='en',
-                            to_language='vi'
-                        )
-                        sub_copy["vi_text"] = vi_text
+                        vi_text = ts.translate_text(en_text, translator='google', from_language='en', to_language='vi')
+                        sub_dict["vi_text"] = vi_text
                         translated_count += 1
-                        # print(f" Dịch sub {i+1}: OK") # Có thể quá nhiều log
                     except Exception as e:
                         error_msg = f"Lỗi dịch sub {i+1}: {str(e)}"
                         print(error_msg)
                         errors.append(error_msg)
-                        # Giữ nguyên sub_copy không có vi_text
-                
-                updated_subtitles_data.append(sub_copy) # Thêm bản sao (đã dịch hoặc chưa) vào list mới
-                # Có thể thêm sleep nhỏ nếu gặp lỗi rate limit
-                # time.sleep(0.05) 
-
-            subtitles_data = updated_subtitles_data # Gán lại list đã cập nhật
+                        sub_dict["vi_text"] = ""
+                else:
+                     sub_dict["vi_text"] = ""
+                     
+                subtitles_data_processed.append(sub_dict)
+            
             print(f"Dịch hoàn tất. {translated_count} câu đã được dịch.")
-            if errors:
-                print(f"Có {len(errors)} lỗi xảy ra trong quá trình dịch.")
-                # Có thể báo lỗi cụ thể hơn nếu muốn
-            if status_callback: status_callback("Dịch phụ đề hoàn tất.")
-        # ==============================
+            if errors: print(f"Có {len(errors)} lỗi xảy ra trong quá trình dịch.")
+            if status_callback: status_callback(f"Dịch phụ đề hoàn tất. Đã dịch {translated_count}/{total_subs} câu.")
+        else:
+            if status_callback: status_callback("Bỏ qua dịch do thư viện chưa cài đặt.")
+            for sub_obj in subtitles_data_fetched:
+                 sub_dict = {
+                    'text': sub_obj.text,
+                    'start': sub_obj.start,
+                    'duration': sub_obj.duration,
+                    'vi_text': ''
+                 }
+                 subtitles_data_processed.append(sub_dict)
 
-        # Lưu vào file JSON
         safe_title = sanitize_filename(title)
         subtitle_filename = f"{safe_title}_{video_id}.json"
         subtitle_path = os.path.join(download_folder, subtitle_filename)
-        
-        with open(subtitle_path, 'w', encoding='utf-8') as f:
-            json.dump(subtitles_data, f, ensure_ascii=False, indent=4)
-        
-        if status_callback: status_callback("Tải phụ đề hoàn tất.")
-        print(f"Subtitles saved to: {subtitle_path}")
-        return subtitle_path
+        try:
+            with open(subtitle_path, 'w', encoding='utf-8') as f:
+                json.dump(subtitles_data_processed, f, ensure_ascii=False, indent=4)
+            if status_callback: status_callback("Lưu phụ đề hoàn tất.")
+            print(f"Subtitles saved to: {subtitle_path}")
+            return subtitle_path
+        except Exception as e:
+            print(f"Lỗi khi lưu file phụ đề JSON: {e}")
+            if status_callback: status_callback(f"Lỗi lưu file phụ đề: {e}")
+            raise IOError(f"Lỗi khi lưu file phụ đề: {e}")
+    else:
+        print(f"Không có dữ liệu phụ đề để xử lý cho {video_id} dù không có lỗi trước đó.")
+        raise NoEnglishTranscriptError(f"Lỗi logic: không có dữ liệu phụ đề cho {video_id}.")
 
-    except Exception as e:
-        print(f"Lỗi khi tải hoặc dịch phụ đề: {e}")
-        if status_callback: status_callback(f"Lỗi khi tải/dịch phụ đề: {e}")
-        # Không ném lỗi ở đây, trả về None để download chính vẫn tiếp tục (chỉ không có sub)
-        return None
-
-def download_thumbnail(url, download_folder, video_id, status_callback=None):
+def download_thumbnail(video_id, download_folder, status_callback=None): # Sửa tham số, không cần url
     if status_callback: status_callback("Đang tải ảnh thumbnail...")
+    thumbnail_path = None
     try:
-        yt = YouTube(url)
-        thumbnail_url = yt.thumbnail_url
-        # Lấy thumbnail chất lượng cao nhất (thường là maxresdefault.jpg)
-        # Tuy nhiên, maxresdefault không phải lúc nào cũng có, hqdefault thường an toàn hơn
-        thumbnail_url = f"https://img.youtube.com/vi/{video_id}/hqdefault.jpg" # Thử hqdefault
+        # Lấy thumbnail chất lượng cao nhất
+        thumbnail_url = f"https://img.youtube.com/vi/{video_id}/hqdefault.jpg"
 
         # Tạo tên file
         thumbnail_filename = f"YouTube_Thumbnail_{video_id}.jpg"
         thumbnail_path = os.path.join(download_folder, thumbnail_filename)
         
-        # Tải ảnh
-        response = requests.get(thumbnail_url, stream=True)
-        response.raise_for_status() # Kiểm tra lỗi HTTP
+        # Tải ảnh với tiến trình
+        response = requests.get(thumbnail_url, stream=True, timeout=10)
+        response.raise_for_status()
         
-        with open(thumbnail_path, 'wb') as f:
-             for chunk in response.iter_content(chunk_size=8192):
-                 f.write(chunk)
+        # Lấy kích thước file nếu có
+        content_length = response.headers.get('content-length')
+        if content_length:
+            content_length = int(content_length)
+            downloaded = 0
+            
+            with open(thumbnail_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    if status_callback and content_length > 0:
+                        percent = int((downloaded / content_length) * 100)
+                        if percent % 20 == 0:  # Cập nhật mỗi 20%
+                            status_callback(f"Tải thumbnail: {percent}%")
+        else:
+            # Nếu không có content-length
+            with open(thumbnail_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
 
         if status_callback: status_callback("Tải thumbnail hoàn tất.")
         print(f"Thumbnail saved to: {thumbnail_path}")
         return thumbnail_path
 
-    except Exception as e:
-        print(f"Lỗi khi tải thumbnail: {e}")
-        # Thử fallback về thumbnail mặc định nếu lỗi (ít quan trọng hơn)
+    except requests.exceptions.RequestException as e:
+        print(f"Lỗi mạng khi tải thumbnail: {e}")
+        # Thử fallback về thumbnail mặc định nếu lỗi
         thumbnail_url = f"https://img.youtube.com/vi/{video_id}/default.jpg"
         try:
-            response = requests.get(thumbnail_url, stream=True)
+            response = requests.get(thumbnail_url, stream=True, timeout=5)
             response.raise_for_status()
             thumbnail_filename = f"YouTube_Thumbnail_{video_id}_default.jpg"
             thumbnail_path = os.path.join(download_folder, thumbnail_filename)
@@ -281,32 +327,45 @@ def download_thumbnail(url, download_folder, video_id, status_callback=None):
             if status_callback: status_callback("Đã tải thumbnail mặc định.")
             print(f"Default thumbnail saved to: {thumbnail_path}")
             return thumbnail_path
-        except Exception as e2:
-             print(f"Lỗi khi tải thumbnail mặc định: {e2}")
+        except requests.exceptions.RequestException as e2:
+             print(f"Lỗi mạng khi tải thumbnail mặc định: {e2}")
              if status_callback: status_callback(f"Lỗi khi tải thumbnail: {e}")
-             return None # Không có thumbnail
+             return None
+    except Exception as e:
+        print(f"Lỗi không xác định khi tải thumbnail: {e}")
+        if status_callback: status_callback(f"Lỗi khi tải thumbnail: {e}")
+        return None
 
 def download_youtube_video(url, download_folder, status_callback=None):
     """Tải audio, phụ đề (kèm dịch nếu có thể), thumbnail cho video YouTube."""
-    try:
-        if status_callback: status_callback("Đang lấy thông tin video...")
-        yt = YouTube(url)
-        video_id = yt.video_id
-        title = yt.title
+    video_id = extract_video_id(url) # Vẫn lấy video_id trước để dùng cho tên file
+    if not video_id:
+        raise ValueError("Không thể trích xuất Video ID từ URL.")
         
-        print(f"Processing video: {title} ({video_id})")
+    print(f"Processing video ID: {video_id}")
 
-        # 1. Tải Audio
-        audio_path = download_audio(url, download_folder, video_id, status_callback)
-        if not audio_path:
-             raise Exception("Tải audio thất bại.")
+    title = None # Sẽ lấy title từ yt-dlp sau
+    audio_path = None
+    subtitle_path = None
+    thumbnail_path = None
 
-        # 2. Tải Phụ đề (và dịch nếu có thể)
+    try:
+        # 1. Tải Audio và lấy Title từ yt-dlp
+        if status_callback: status_callback("Đang chuẩn bị tải âm thanh và lấy thông tin...")
+        
+        # Tùy chọn để lấy info mà không cần tải lại nếu file đã có? (Khó với yt-dlp)
+        # Tạm thời cứ tải lại audio
+        
+        audio_path, title = download_audio(url, download_folder, video_id, status_callback)
+        
+        if not audio_path or not title:
+             raise Exception("Tải audio hoặc lấy title thất bại.")
+
+        # 2. Tải Phụ đề (và dịch nếu có thể) - Dùng video_id và title đã lấy
         subtitle_path = download_subtitles(video_id, download_folder, title, status_callback)
-        # Việc tải phụ đề thất bại không nên làm dừng toàn bộ quá trình
-
-        # 3. Tải Thumbnail
-        thumbnail_path = download_thumbnail(url, download_folder, video_id, status_callback)
+        
+        # 3. Tải Thumbnail - Dùng video_id
+        thumbnail_path = download_thumbnail(video_id, download_folder, status_callback) # Sửa lại chỉ cần video_id
 
         download_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -314,18 +373,37 @@ def download_youtube_video(url, download_folder, status_callback=None):
             "video_id": video_id,
             "title": title,
             "audio_path": audio_path,
-            "subtitle_path": subtitle_path, # Có thể là None
-            "thumbnail_path": thumbnail_path, # Có thể là None
+            "subtitle_path": subtitle_path, 
+            "thumbnail_path": thumbnail_path,
             "download_date": download_date
         }
         
         if status_callback: status_callback("Hoàn tất tải xuống!")
         return video_info
 
+    except NoEnglishTranscriptError as e:
+        print(f"Hủy tải video {video_id}: {e}")
+        # Xóa file audio đã tải (nếu có)
+        if audio_path and os.path.exists(audio_path):
+            try:
+                os.remove(audio_path)
+                print(f"Đã xóa file audio tạm: {audio_path}")
+            except OSError as rm_err:
+                print(f"Lỗi khi xóa file audio tạm {audio_path}: {rm_err}")
+        # Ném lại lỗi với thông điệp cho người dùng
+        raise Exception(f"Video không có phụ đề tiếng Anh nên đã bị bỏ qua.") from e
+
     except Exception as e:
-        print(f"Lỗi trong quá trình xử lý video: {e}")
+        print(f"Lỗi không mong muốn trong quá trình xử lý video ({video_id}): {e}")
+        # Cố gắng xóa audio nếu có lỗi khác xảy ra sau khi tải audio thành công
+        if audio_path and os.path.exists(audio_path):
+             try:
+                  os.remove(audio_path)
+                  print(f"Đã xóa file audio tạm do lỗi khác: {audio_path}")
+             except OSError as rm_err:
+                  print(f"Lỗi khi xóa file audio tạm {audio_path}: {rm_err}")
         if status_callback: status_callback(f"Lỗi: {e}")
-        # Ném lại lỗi để DownloadThread xử lý và báo cho người dùng
+        # Ném lại lỗi gốc để DownloadThread hiển thị chi tiết
         raise e
 
 def sanitize_filename(filename):
