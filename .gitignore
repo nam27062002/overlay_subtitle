@@ -1,0 +1,35 @@
+# Tệp và thư mục đã tải xuống
+src/downloads/
+youtube_subtitles.db
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.Python
+
+# Môi trường ảo
+env/
+venv/
+*/env/
+*/venv/
+.venv/
+*/.venv/
+
+# IDE & Hệ điều hành
+.vscode/
+.idea/
+.project
+.pydevproject
+.settings/
+*.sublime-workspace
+*.sublime-project
+
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+dist/
+build/
+*.egg
+*.whl 
