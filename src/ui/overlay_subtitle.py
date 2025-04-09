@@ -126,6 +126,28 @@ class OverlaySubtitle(QWidget):
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(10, 10, 10, 10)
         
+        # Add a toggle button for controls
+        self.toggle_controls_button = QPushButton("⚙️")
+        self.toggle_controls_button.setFixedSize(30, 30)
+        self.toggle_controls_button.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(0, 0, 0, 0.5);
+                color: white;
+                border-radius: 15px;
+                border: 1px solid gray;
+            }
+            QPushButton:hover {
+                background-color: rgba(40, 40, 40, 0.7);
+            }
+        """)
+        self.toggle_controls_button.clicked.connect(self.toggle_controls_visibility)
+        
+        # Add toggle button in a separate layout positioned at top-right
+        toggle_layout = QHBoxLayout()
+        toggle_layout.addStretch()
+        toggle_layout.addWidget(self.toggle_controls_button)
+        main_layout.insertLayout(0, toggle_layout)
+        
         # Subtitle display
         self.subtitle_label = QLabel("...")
         self.subtitle_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -156,35 +178,83 @@ class OverlaySubtitle(QWidget):
 
         # Transparency slider
         control_layout.addWidget(QLabel("Transparency:"))
+        
+        transparency_layout = QHBoxLayout()
+        trans_minus_btn = QPushButton("-")
+        trans_minus_btn.setFixedSize(25, 25)
+        trans_minus_btn.clicked.connect(lambda: self.adjust_transparency(-5))
+        
+        trans_plus_btn = QPushButton("+")
+        trans_plus_btn.setFixedSize(25, 25)
+        trans_plus_btn.clicked.connect(lambda: self.adjust_transparency(5))
+        
         self.transparency_slider = QSlider(Qt.Orientation.Horizontal)
         self.transparency_slider.setRange(0, 100)
         self.transparency_slider.setValue(self.background_alpha)
-        self.transparency_slider.setFixedWidth(60) # Reduce width
+        self.transparency_slider.setFixedWidth(80)
+        self.transparency_slider.setStyleSheet("QSlider::handle { width: 20px; height: 20px; }")
         self.transparency_slider.valueChanged.connect(self.update_background_transparency)
-        control_layout.addWidget(self.transparency_slider)
+        self.transparency_slider.setToolTip("Adjust background transparency")
+        
+        transparency_layout.addWidget(trans_minus_btn)
+        transparency_layout.addWidget(self.transparency_slider)
+        transparency_layout.addWidget(trans_plus_btn)
+        control_layout.addLayout(transparency_layout)
 
         # Font size slider
         control_layout.addWidget(QLabel("Font Size:"))
+        
+        fontsize_layout = QHBoxLayout()
+        font_minus_btn = QPushButton("-")
+        font_minus_btn.setFixedSize(25, 25)
+        font_minus_btn.clicked.connect(lambda: self.adjust_font_size(-1))
+        
+        font_plus_btn = QPushButton("+")
+        font_plus_btn.setFixedSize(25, 25)
+        font_plus_btn.clicked.connect(lambda: self.adjust_font_size(1))
+        
         self.font_size_slider = QSlider(Qt.Orientation.Horizontal)
         self.font_size_slider.setRange(self.MIN_FONT_SIZE, self.MAX_FONT_SIZE)
         self.font_size_slider.setValue(self.current_font_size)
-        self.font_size_slider.setFixedWidth(60) # Reduce width
+        self.font_size_slider.setFixedWidth(80)
+        self.font_size_slider.setStyleSheet("QSlider::handle { width: 20px; height: 20px; }")
         self.font_size_slider.valueChanged.connect(self.update_font_size)
-        control_layout.addWidget(self.font_size_slider)
+        self.font_size_slider.setToolTip(f"Adjust font size ({self.MIN_FONT_SIZE}-{self.MAX_FONT_SIZE})")
+        
+        fontsize_layout.addWidget(font_minus_btn)
+        fontsize_layout.addWidget(self.font_size_slider)
+        fontsize_layout.addWidget(font_plus_btn)
+        control_layout.addLayout(fontsize_layout)
 
         # Speed slider and label
         control_layout.addWidget(QLabel("Speed:"))
+        
+        speed_layout = QHBoxLayout()
+        speed_minus_btn = QPushButton("-")
+        speed_minus_btn.setFixedSize(25, 25)
+        speed_minus_btn.clicked.connect(lambda: self.adjust_playback_speed(-0.25))
+        
+        speed_plus_btn = QPushButton("+")
+        speed_plus_btn.setFixedSize(25, 25)
+        speed_plus_btn.clicked.connect(lambda: self.adjust_playback_speed(0.25))
+        
         self.speed_slider = QSlider(Qt.Orientation.Horizontal)
         # Convert rate to slider value (0.25 -> 25, 0.5 -> 50, 1.0 -> 100, 2.0 -> 200)
         min_slider_val = int(self.MIN_PLAYBACK_RATE * self.SLIDER_TO_RATE_FACTOR)
         max_slider_val = int(self.MAX_PLAYBACK_RATE * self.SLIDER_TO_RATE_FACTOR)
         self.speed_slider.setRange(min_slider_val, max_slider_val)
         self.speed_slider.setValue(int(self.current_playback_rate * self.SLIDER_TO_RATE_FACTOR))
-        self.speed_slider.setFixedWidth(60) # Reduce width
+        self.speed_slider.setFixedWidth(80)
+        self.speed_slider.setStyleSheet("QSlider::handle { width: 20px; height: 20px; }")
         self.speed_slider.valueChanged.connect(self.update_playback_speed)
-        control_layout.addWidget(self.speed_slider)
+        self.speed_slider.setToolTip("Adjust playback speed")
         
-        self.speed_label = QLabel(f"{self.current_playback_rate:.2f}x") # Label displaying speed
+        speed_layout.addWidget(speed_minus_btn)
+        speed_layout.addWidget(self.speed_slider)
+        speed_layout.addWidget(speed_plus_btn)
+        control_layout.addLayout(speed_layout)
+        
+        self.speed_label = QLabel(f"{self.current_playback_rate:.2f}x")
         self.speed_label.setFixedWidth(40)
         control_layout.addWidget(self.speed_label)
         
@@ -207,6 +277,9 @@ class OverlaySubtitle(QWidget):
         
         main_layout.addWidget(controls_widget)
         self.controls_widget = controls_widget
+        
+        # Controls state variables
+        self.controls_pinned = self.settings.value("overlay/controlsPinned", False, type=bool)  # Load from settings
         
         # Media player
         self.player = QMediaPlayer()
@@ -259,10 +332,15 @@ class OverlaySubtitle(QWidget):
         self.play_button.setText("⏸")
         self.timer.start()
         
+        # Set initial controls visibility based on saved setting
+        if self.controls_pinned:
+            self.controls_widget.setVisible(True)
+            self.toggle_controls_button.setText("❌")
+        
         # Automatically start translation if setting is enabled
         if self.show_vietnamese and not self.translations_attempted:
             self.start_translation()
-    
+        
     def move_to_bottom(self):
         """Move overlay to bottom of screen"""
         screen_geometry = self.screen().geometry()
@@ -409,10 +487,11 @@ class OverlaySubtitle(QWidget):
         self.background_alpha = value
         background_color = f"rgba(0, 0, 0, {value/100})"
         
-        # Style for main window
+        # Style for main window - change QLabel background to match main background instead of transparent
         self.setStyleSheet(f"""
             QWidget {{ background-color: {background_color}; }}
-            QLabel {{ color: white; font-weight: bold; background-color: transparent; }}
+            QLabel {{ color: white; font-weight: bold; background-color: {background_color}; }}
+            QPushButton, QCheckBox, QSlider {{ background-color: transparent; }}
         """)
         
         # Style for subtitle text
@@ -427,10 +506,9 @@ class OverlaySubtitle(QWidget):
         font.setBold(True)
         self.subtitle_label.setFont(font)
         
-        # Set drop shadow style for better readability
+        # Set drop shadow style for better readability but keep background from parent style
         self.subtitle_label.setStyleSheet(f"""
             color: white; 
-            background-color: transparent;
             font-size: {size}pt;
             text-shadow: 1px 1px 2px black, 0 0 1em black;
         """)
@@ -447,14 +525,27 @@ class OverlaySubtitle(QWidget):
         self.speed_label.setText(f"{self.current_playback_rate:.2f}x")
         self.speed_slider.setValue(int(self.current_playback_rate * self.SLIDER_TO_RATE_FACTOR))
     
+    def toggle_controls_visibility(self):
+        """Toggle visibility of the controls panel"""
+        self.controls_pinned = not self.controls_pinned
+        self.controls_widget.setVisible(self.controls_pinned)
+        
+        # Update button appearance to indicate state
+        if self.controls_pinned:
+            self.toggle_controls_button.setText("❌")
+        else:
+            self.toggle_controls_button.setText("⚙️")
+    
     def enterEvent(self, event):
-        """Show controls when mouse moves into overlay"""
-        self.controls_widget.setVisible(True)
+        """Show controls when mouse moves into overlay only if not pinned"""
+        if not self.controls_pinned:
+            self.controls_widget.setVisible(True)
         super().enterEvent(event)
     
     def leaveEvent(self, event):
-        """Hide controls when mouse leaves overlay"""
-        self.controls_widget.setVisible(False)
+        """Hide controls when mouse leaves overlay only if not pinned"""
+        if not self.controls_pinned:
+            self.controls_widget.setVisible(False)
         super().leaveEvent(event)
     
     def mousePressEvent(self, event):
@@ -489,8 +580,50 @@ class OverlaySubtitle(QWidget):
         self.settings.setValue("overlay/fontSize", self.current_font_size)
         self.settings.setValue("overlay/playbackRate", self.current_playback_rate)
         self.settings.setValue("overlay/showVietnamese", self.show_vietnamese)
+        self.settings.setValue("overlay/controlsPinned", self.controls_pinned)  # Save controls state
         
         # Stop playback
         self.player.stop()
         self.timer.stop()
-        super().closeEvent(event) 
+        super().closeEvent(event)
+    
+    def adjust_transparency(self, delta):
+        """Adjust transparency by adding delta to current value"""
+        new_value = self.transparency_slider.value() + delta
+        # Ensure within bounds
+        new_value = max(0, min(100, new_value))
+        self.transparency_slider.setValue(new_value)
+    
+    def adjust_font_size(self, delta):
+        """Adjust font size by adding delta to current value"""
+        new_value = self.font_size_slider.value() + delta
+        # Ensure within bounds
+        new_value = max(self.MIN_FONT_SIZE, min(self.MAX_FONT_SIZE, new_value))
+        self.font_size_slider.setValue(new_value)
+    
+    def adjust_playback_speed(self, delta):
+        """Adjust playback speed by adding delta to current value"""
+        # Find current index in PLAYBACK_RATES
+        current_index = -1
+        for i, rate in enumerate(self.PLAYBACK_RATES):
+            if abs(rate - self.current_playback_rate) < 0.01:  # Tolerance for float comparison
+                current_index = i
+                break
+        
+        if current_index == -1:
+            # Not an exact match, find closest
+            current_index = min(range(len(self.PLAYBACK_RATES)), 
+                              key=lambda i: abs(self.PLAYBACK_RATES[i] - self.current_playback_rate))
+        
+        # Calculate new index with delta
+        if delta > 0:
+            new_index = min(current_index + 1, len(self.PLAYBACK_RATES) - 1)
+        else:
+            new_index = max(current_index - 1, 0)
+        
+        # Set new rate
+        new_rate = self.PLAYBACK_RATES[new_index]
+        self.speed_slider.setValue(int(new_rate * self.SLIDER_TO_RATE_FACTOR))
+        self.current_playback_rate = new_rate
+        self.player.setPlaybackRate(self.current_playback_rate)
+        self.speed_label.setText(f"{self.current_playback_rate:.2f}x") 
